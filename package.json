@@ -55,5 +55,8 @@
       "localPath": "extensions/xmtp",
       "defaultChoice": "npm"
     }
+  },
+  "scripts": {
+    "test": "vitest run"
   }
 }

@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/coffeebot-agent/openclaw-xmtp.git"
+    "url": "https://github.com/coffeexcoin/openclaw-xmtp.git"
   },
   "keywords": [
     "openclaw",
@@ -21,7 +21,8 @@
   ],
   "files": [
     "index.ts",
-    "src/",
+    "src/*.ts",
+    "!src/*.test.ts",
     "openclaw.plugin.json"
   ],
   "dependencies": {

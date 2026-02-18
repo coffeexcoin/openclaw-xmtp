@@ -185,7 +185,7 @@ function createGatewayContext(cfg: OpenClawConfig, account: ResolvedXmtpAccount)
       error: vi.fn(),
       exit: vi.fn(),
     },
-    abortSignal: new AbortController().signal,
+    abortSignal: accountAbort.signal,
     setStatus: vi.fn(),
     getStatus: vi.fn(() => ({
       accountId: account.accountId,
@@ -200,18 +200,22 @@ function createGatewayContext(cfg: OpenClawConfig, account: ResolvedXmtpAccount)
   };
 }
 
+let accountAbort = new AbortController();
+
 describe("xmtpPlugin behavior", () => {
-  let activeStop: (() => Promise<void>) | null = null;
+  let startAccountDone: Promise<void> | null = null;
 
   beforeEach(() => {
     busState.reset();
-    activeStop = null;
+    accountAbort = new AbortController();
+    startAccountDone = null;
   });
 
   afterEach(async () => {
-    if (activeStop) {
-      await activeStop();
-      activeStop = null;
+    accountAbort.abort();
+    if (startAccountDone) {
+      await startAccountDone;
+      startAccountDone = null;
     }
   });
 
@@ -230,10 +234,10 @@ describe("xmtpPlugin behavior", () => {
     }
 
     const gatewayCtx = createGatewayContext(cfg, account);
-    const lifecycle = (await startAccount(gatewayCtx)) as {
-      stop: () => Promise<void>;
-    };
-    activeStop = lifecycle.stop;
+    // startAccount now blocks until abortSignal fires; run in background
+    startAccountDone = Promise.resolve(startAccount(gatewayCtx)).then(() => {});
+    // Give the bus time to set up
+    await new Promise((r) => setTimeout(r, 10));
     return { runtimeBundle, gatewayCtx };
   }
 

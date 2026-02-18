@@ -508,13 +508,20 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
 
       ctx.log?.info(`[${account.accountId}] XMTP provider started (address: ${bus.getAddress()})`);
 
-      return {
-        stop: async () => {
-          await bus.close();
-          activeBuses.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] XMTP provider stopped`);
-        },
-      };
+      // Block until abortSignal fires — OpenClaw treats a resolved startAccount
+      // as "provider exited" and triggers auto-restart with backoff.
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal?.aborted) {
+          resolve();
+          return;
+        }
+        const onAbort = () => resolve();
+        ctx.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      });
+
+      await bus.close();
+      activeBuses.delete(account.accountId);
+      ctx.log?.info(`[${account.accountId}] XMTP provider stopped`);
     },
   },
 };

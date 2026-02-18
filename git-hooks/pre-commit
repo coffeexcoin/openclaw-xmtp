@@ -1,0 +1,3 @@
+#!/bin/sh
+# Format + lint check before commit (matches openclaw upstream)
+npx oxfmt --check && npx oxlint

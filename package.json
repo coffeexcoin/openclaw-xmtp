@@ -2,40 +2,50 @@
   "name": "@coffeexdev/openclaw-xmtp",
   "version": "2026.2.16",
   "description": "OpenClaw XMTP channel plugin for E2E encrypted wallet-to-wallet messaging",
-  "type": "module",
+  "keywords": [
+    "channel",
+    "e2e",
+    "encrypted",
+    "ethereum",
+    "messaging",
+    "openclaw",
+    "plugin",
+    "wallet",
+    "xmtp"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/coffeexcoin/openclaw-xmtp.git"
   },
-  "keywords": [
-    "openclaw",
-    "xmtp",
-    "channel",
-    "plugin",
-    "e2e",
-    "encrypted",
-    "messaging",
-    "wallet",
-    "ethereum"
-  ],
   "files": [
     "index.ts",
     "src/*.ts",
     "!src/*.test.ts",
     "openclaw.plugin.json"
   ],
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "format": "oxfmt --write",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint",
+    "check": "npm run format:check && npm run lint",
+    "prepare": "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0"
+  },
   "dependencies": {
     "@xmtp/agent-sdk": "^2.2.0",
     "viem": "^2.23.2",
     "zod": "^4.3.6"
   },
-  "peerDependencies": {
-    "openclaw": ">=2026.2.15"
-  },
   "devDependencies": {
     "openclaw": "latest",
+    "oxfmt": "0.32.0",
+    "oxlint": "^1.47.0",
     "vitest": "^3.1.1"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.15"
   },
   "openclaw": {
     "extensions": [
@@ -56,8 +66,5 @@
       "localPath": "extensions/xmtp",
       "defaultChoice": "npm"
     }
-  },
-  "scripts": {
-    "test": "vitest run"
   }
 }

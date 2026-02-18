@@ -1,5 +1,5 @@
 {
-  "name": "@coffeexdev/openclaw-xmtp",
+  "name": "@coffeexdev/xmtp",
   "version": "2026.2.16",
   "description": "OpenClaw XMTP channel plugin for E2E encrypted wallet-to-wallet messaging",
   "keywords": [
@@ -62,7 +62,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@coffeexdev/openclaw-xmtp",
+      "npmSpec": "@coffeexdev/xmtp",
       "localPath": "extensions/xmtp",
       "defaultChoice": "npm"
     }

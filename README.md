@@ -1,4 +1,4 @@
-# @coffeexdev/openclaw-xmtp
+# @coffeexdev/xmtp
 
 XMTP channel plugin for [OpenClaw](https://github.com/open-claw/openclaw) — adds E2E encrypted wallet-to-wallet messaging via the [XMTP protocol](https://xmtp.org/).
 
@@ -15,13 +15,13 @@ XMTP channel plugin for [OpenClaw](https://github.com/open-claw/openclaw) — ad
 ## Installation
 
 ```bash
-openclaw plugins install @coffeexdev/openclaw-xmtp
+openclaw plugins install @coffeexdev/xmtp
 ```
 
 Or install manually via npm:
 
 ```bash
-npm install @coffeexdev/openclaw-xmtp
+npm install @coffeexdev/xmtp
 ```
 
 ## Configuration

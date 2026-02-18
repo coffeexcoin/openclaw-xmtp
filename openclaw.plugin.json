@@ -7,6 +7,6 @@
     "properties": {}
   },
   "install": {
-    "npmSpec": "@coffeexdev/openclaw-xmtp"
+    "npmSpec": "@coffeexdev/xmtp"
   }
 }

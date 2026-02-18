@@ -42,10 +42,10 @@ channels:
     # dbEncryptionKeyFile: "/path/to/db-encryption-key"
 
     # XMTP network environment (default: production)
-    env: production  # or: dev, local
+    env: production # or: dev, local
 
     # DM policy (default: pairing)
-    dmPolicy: pairing  # or: open, allowlist, disabled
+    dmPolicy: pairing # or: open, allowlist, disabled
 
     # Allowlist of Ethereum addresses (used with allowlist/pairing policies)
     allowFrom:
@@ -64,12 +64,12 @@ As an alternative to config file values, you can set:
 
 ## DM Policies
 
-| Policy | Behavior |
-|---|---|
-| `open` | Accept DMs from anyone |
-| `pairing` | New senders receive a pairing code; approve via `openclaw pair approve xmtp <code>` |
-| `allowlist` | Only accept DMs from addresses in `allowFrom` or approved via pairing |
-| `disabled` | Drop all inbound DMs |
+| Policy      | Behavior                                                                            |
+| ----------- | ----------------------------------------------------------------------------------- |
+| `open`      | Accept DMs from anyone                                                              |
+| `pairing`   | New senders receive a pairing code; approve via `openclaw pair approve xmtp <code>` |
+| `allowlist` | Only accept DMs from addresses in `allowFrom` or approved via pairing               |
+| `disabled`  | Drop all inbound DMs                                                                |
 
 ## Links
 

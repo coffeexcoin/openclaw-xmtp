@@ -122,11 +122,11 @@ When `accounts` is present, env vars can still provide missing secrets for those
 
 ## Group Policies
 
-| Policy      | Behavior                                                                                  |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `open`      | Accept group messages from anyone                                                          |
-| `allowlist` | Only accept group messages from addresses in `groupAllowFrom` or approved via pairing     |
-| `disabled`  | Drop all inbound group messages                                                            |
+| Policy      | Behavior                                                                              |
+| ----------- | ------------------------------------------------------------------------------------- |
+| `open`      | Accept group messages from anyone                                                     |
+| `allowlist` | Only accept group messages from addresses in `groupAllowFrom` or approved via pairing |
+| `disabled`  | Drop all inbound group messages                                                       |
 
 ## Commands
 

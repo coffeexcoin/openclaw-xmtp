@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Agent, createSigner, createUser } from "@xmtp/agent-sdk";
+import { Agent, createSigner, createUser, filter } from "@xmtp/agent-sdk";
+import { ConsentState, encodeText } from "@xmtp/node-bindings";
 import { getXmtpRuntime } from "./runtime.js";
 
 export type XmtpReplyContext = {
@@ -18,10 +19,15 @@ export interface XmtpBusOptions {
   // Default to auto-consenting DMs so pairing flows can proceed.
   shouldConsentDm: (senderAddress: string) => boolean;
   onMessage: (params: {
-    senderAddress: string;
+    // undefined when sender address can't be resolved (e.g. group messages
+    // where only inbox ID is available). An inbox ID is not an Ethereum address,
+    // so it won't match allowFrom/groupAllowFrom entries. The normalizeAllowEntry
+    // try/catch handles this gracefully (falls through to trimmed.toLowerCase()).
+    senderAddress: string | undefined;
     senderInboxId: string;
     conversationId: string;
     isDm: boolean;
+    isGroup: boolean;
     text: string;
     messageId: string;
     replyContext?: XmtpReplyContext;
@@ -34,6 +40,7 @@ export interface XmtpBusHandle {
   sendText(target: string, text: string): Promise<void>;
   sendReply(target: string, text: string, referenceMessageId: string): Promise<void>;
   getAddress(): string;
+  getInboxId(): string | undefined;
   close(): Promise<void>;
 }
 
@@ -45,7 +52,7 @@ type XmtpConversationHandle = {
 type XmtpAgentHandle = Awaited<ReturnType<typeof Agent.create>>;
 
 type XmtpInboundMessageContext = {
-  getSenderAddress: () => Promise<string | null>;
+  getSenderAddress: () => Promise<string | undefined>;
   message: {
     senderInboxId: string;
     content: unknown;
@@ -55,7 +62,15 @@ type XmtpInboundMessageContext = {
     id: string;
   };
   isDm: () => boolean;
+  client: unknown;
 };
+
+const DEFAULT_RETRY_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function looksLikeEthAddress(value: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(value.trim());
@@ -183,18 +198,17 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
     try {
       if (ctx.isDm()) {
         const senderAddress = await (
-          ctx as { getSenderAddress?: () => Promise<string | null> }
+          ctx as { getSenderAddress?: () => Promise<string | undefined> }
         ).getSenderAddress?.();
-        type ConsentState = Parameters<NonNullable<typeof ctx.conversation.updateConsentState>>[0];
         const conversation = ctx.conversation as unknown as {
           updateConsentState: (state: ConsentState) => void;
         };
         if (!senderAddress) {
-          conversation.updateConsentState("allowed" as unknown as ConsentState);
+          conversation.updateConsentState(ConsentState.Allowed);
           return;
         }
         if (shouldConsentDm(senderAddress.toLowerCase())) {
-          conversation.updateConsentState("allowed" as unknown as ConsentState);
+          conversation.updateConsentState(ConsentState.Allowed);
         }
       }
     } catch (err) {
@@ -204,25 +218,28 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
 
   agent.on("text", async (ctx) => {
     try {
-      const typedCtx = ctx as XmtpInboundMessageContext;
-      const senderAddressRaw = await typedCtx.getSenderAddress();
-      if (!senderAddressRaw) {
-        throw new Error("XMTP message missing sender address");
+      const typedCtx = ctx as unknown as XmtpInboundMessageContext;
+
+      // Self-echo filter: drop messages sent by this agent
+      if (filter.fromSelf(ctx.message, ctx.client)) {
+        return;
       }
-      const senderAddress = senderAddressRaw.toLowerCase();
+
+      const senderAddressRaw = await typedCtx.getSenderAddress();
+      const senderAddress = senderAddressRaw?.toLowerCase() ?? undefined;
       const senderInboxId = typedCtx.message.senderInboxId;
       const conversationId = typedCtx.conversation.id;
       const isDm = typedCtx.isDm();
+      const isGroup = !isDm;
       const text = typedCtx.message.content as string;
       const messageId = typedCtx.message.id;
-
-      if (!isDm) return;
 
       await onMessage({
         senderAddress,
         senderInboxId,
         conversationId,
         isDm,
+        isGroup,
         text,
         messageId,
       });
@@ -238,19 +255,27 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
   ).on("reply", async (ctx) => {
     try {
       const typedCtx = ctx as XmtpInboundMessageContext;
-      const senderAddressRaw = await typedCtx.getSenderAddress();
-      if (!senderAddressRaw) {
-        throw new Error("XMTP message missing sender address");
+
+      // Self-echo filter: drop messages sent by this agent
+      if (
+        filter.fromSelf(
+          (typedCtx as { message: Parameters<typeof filter.fromSelf>[0] }).message,
+          typedCtx.client as Parameters<typeof filter.fromSelf>[1],
+        )
+      ) {
+        return;
       }
-      const senderAddress = senderAddressRaw.toLowerCase();
+
+      const senderAddressRaw = await typedCtx.getSenderAddress();
+      const senderAddress = senderAddressRaw?.toLowerCase() ?? undefined;
       const senderInboxId = typedCtx.message.senderInboxId;
       const conversationId = typedCtx.conversation.id;
       const isDm = typedCtx.isDm();
+      const isGroup = !isDm;
       const messageId = typedCtx.message.id;
       const replyContent = typedCtx.message.content;
       const text = extractTextFromMessageContent(replyContent);
 
-      if (!isDm) return;
       if (!text?.trim()) {
         return;
       }
@@ -260,6 +285,7 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
         senderInboxId,
         conversationId,
         isDm,
+        isGroup,
         text,
         messageId,
         replyContext: extractReplyContext(replyContent),
@@ -269,11 +295,63 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
     }
   });
 
+  // Markdown handler: Converse and other clients may send markdown content type
+  agent.on("markdown", async (ctx) => {
+    try {
+      const typedCtx = ctx as unknown as XmtpInboundMessageContext;
+
+      // Self-echo filter: drop messages sent by this agent
+      if (filter.fromSelf(ctx.message, ctx.client)) {
+        return;
+      }
+
+      const senderAddressRaw = await typedCtx.getSenderAddress();
+      const senderAddress = senderAddressRaw?.toLowerCase() ?? undefined;
+      const senderInboxId = typedCtx.message.senderInboxId;
+      const conversationId = typedCtx.conversation.id;
+      const isDm = typedCtx.isDm();
+      const isGroup = !isDm;
+      const text = typedCtx.message.content as string;
+      const messageId = typedCtx.message.id;
+
+      await onMessage({
+        senderAddress,
+        senderInboxId,
+        conversationId,
+        isDm,
+        isGroup,
+        text,
+        messageId,
+      });
+    } catch (err) {
+      onError?.(err as Error, "handle markdown message");
+    }
+  });
+
   agent.on("unhandledError", (error) => {
     onError?.(error, "unhandled agent error");
   });
 
-  await agent.start();
+  // Retry logic: 3 attempts with exponential backoff (2s, 4s, 8s)
+  let lastStartError: Error | null = null;
+  for (let attempt = 1; attempt <= DEFAULT_RETRY_ATTEMPTS; attempt++) {
+    try {
+      await agent.start();
+      lastStartError = null;
+      break;
+    } catch (err) {
+      lastStartError = err instanceof Error ? err : new Error(String(err));
+      onError?.(lastStartError, `start attempt ${attempt}/${DEFAULT_RETRY_ATTEMPTS}`);
+      if (attempt < DEFAULT_RETRY_ATTEMPTS) {
+        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        await sleep(delay);
+      }
+    }
+  }
+  if (lastStartError) {
+    throw lastStartError;
+  }
+
   onConnect?.();
 
   return {
@@ -291,8 +369,8 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
       const conversation = await resolveConversationForTarget(agent, target);
       if (typeof conversation.sendReply === "function") {
         await conversation.sendReply({
-          content: text,
-          referenceId: trimmedReferenceMessageId,
+          content: encodeText(text),
+          reference: trimmedReferenceMessageId,
         });
         return;
       }
@@ -302,6 +380,10 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
 
     getAddress(): string {
       return agentAddress;
+    },
+
+    getInboxId(): string | undefined {
+      return agent.client?.inboxId;
     },
 
     async close(): Promise<void> {

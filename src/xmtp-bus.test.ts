@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { normalizeEthAddress, startXmtpBus } from "./xmtp-bus.js";
 
 const TEST_WALLET_KEY = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -10,12 +10,10 @@ const xmtpMock = vi.hoisted(() => {
   const handlers = new Map<string, Array<(ctx: unknown) => Promise<void> | void>>();
   const sendByConversation = vi.fn(async (_text: string) => {});
   const sendReplyByConversation = vi.fn(
-    async (_reply: { content: string; referenceId: string }) => {},
+    async (_reply: { content: unknown; reference: string }) => {},
   );
   const sendByAddressDm = vi.fn(async (_text: string) => {});
-  const sendReplyByAddressDm = vi.fn(
-    async (_reply: { content: string; referenceId: string }) => {},
-  );
+  const sendReplyByAddressDm = vi.fn(async (_reply: { content: unknown; reference: string }) => {});
   const getConversationById = vi.fn(async (id: string) => {
     if (id === "missing-conversation") {
       return null;
@@ -30,12 +28,15 @@ const xmtpMock = vi.hoisted(() => {
     sendReply: sendReplyByAddressDm,
   }));
 
+  const fromSelf = vi.fn(() => false);
+
   const agent = {
     address: "0xaabbccddeeff0011223344556677889900aabbcc",
     client: {
       conversations: {
         getConversationById,
       },
+      inboxId: "test-inbox-id-123",
     },
     createDmWithAddress,
     on: vi.fn((event: string, handler: (ctx: unknown) => Promise<void> | void) => {
@@ -60,6 +61,7 @@ const xmtpMock = vi.hoisted(() => {
     sendReplyByAddressDm,
     getConversationById,
     createDmWithAddress,
+    fromSelf,
     agent,
     AgentCreate,
     createUser,
@@ -91,9 +93,13 @@ const xmtpMock = vi.hoisted(() => {
         sendText: sendByAddressDm,
         sendReply: sendReplyByAddressDm,
       }));
+      fromSelf.mockReset();
+      fromSelf.mockReturnValue(false);
       agent.on.mockClear();
-      agent.start.mockClear();
-      agent.stop.mockClear();
+      agent.start.mockReset();
+      agent.start.mockResolvedValue(undefined);
+      agent.stop.mockReset();
+      agent.stop.mockResolvedValue(undefined);
       AgentCreate.mockClear();
       createUser.mockClear();
       createSigner.mockClear();
@@ -105,6 +111,7 @@ vi.mock("@xmtp/agent-sdk", () => ({
   Agent: { create: xmtpMock.AgentCreate },
   createSigner: xmtpMock.createSigner,
   createUser: xmtpMock.createUser,
+  filter: { fromSelf: xmtpMock.fromSelf },
 }));
 
 describe("normalizeEthAddress", () => {
@@ -122,6 +129,11 @@ describe("normalizeEthAddress", () => {
 describe("startXmtpBus", () => {
   beforeEach(() => {
     xmtpMock.reset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("sends to a conversation id directly", async () => {
@@ -157,8 +169,8 @@ describe("startXmtpBus", () => {
 
     expect(xmtpMock.getConversationById).toHaveBeenCalledWith("conversation-1");
     expect(xmtpMock.sendReplyByConversation).toHaveBeenCalledWith({
-      content: "threaded reply",
-      referenceId: "msg-parent-1",
+      content: expect.objectContaining({ type: expect.objectContaining({ typeId: "text" }) }),
+      reference: "msg-parent-1",
     });
 
     await bus.close();
@@ -197,8 +209,8 @@ describe("startXmtpBus", () => {
 
     expect(xmtpMock.createDmWithAddress).toHaveBeenCalledWith(TEST_PEER_ADDRESS);
     expect(xmtpMock.sendReplyByAddressDm).toHaveBeenCalledWith({
-      content: "hello reply",
-      referenceId: "msg-parent-2",
+      content: expect.objectContaining({ type: expect.objectContaining({ typeId: "text" }) }),
+      reference: "msg-parent-2",
     });
 
     await bus.close();
@@ -241,6 +253,7 @@ describe("startXmtpBus", () => {
       },
       conversation: { id: "conversation-1" },
       isDm: () => true,
+      client: xmtpMock.agent.client,
     });
 
     expect(onMessage).toHaveBeenCalledWith({
@@ -248,6 +261,7 @@ describe("startXmtpBus", () => {
       senderInboxId: "inbox-1",
       conversationId: "conversation-1",
       isDm: true,
+      isGroup: false,
       text: "hello inbound",
       messageId: "msg-123",
     });
@@ -281,6 +295,7 @@ describe("startXmtpBus", () => {
       },
       conversation: { id: "conversation-1" },
       isDm: () => true,
+      client: xmtpMock.agent.client,
     });
 
     expect(onMessage).toHaveBeenCalledWith({
@@ -288,6 +303,7 @@ describe("startXmtpBus", () => {
       senderInboxId: "inbox-1",
       conversationId: "conversation-1",
       isDm: true,
+      isGroup: false,
       text: "hello reply",
       messageId: "msg-124",
       replyContext: {
@@ -315,7 +331,7 @@ describe("startXmtpBus", () => {
       isDm: (_conv: unknown) => true,
     });
 
-    expect(updateConsentState).toHaveBeenCalledWith("allowed");
+    expect(updateConsentState).toHaveBeenCalledWith(1);
 
     await bus.close();
   });
@@ -341,7 +357,7 @@ describe("startXmtpBus", () => {
     await bus.close();
   });
 
-  it("ignores non-DM text events", async () => {
+  it("forwards group text events with isGroup: true", async () => {
     const onMessage = vi.fn(async () => {});
     const bus = await startXmtpBus({
       walletKey: TEST_WALLET_KEY,
@@ -356,14 +372,256 @@ describe("startXmtpBus", () => {
       getSenderAddress: async () => TEST_PEER_ADDRESS,
       message: {
         senderInboxId: "inbox-1",
-        content: "hello inbound",
+        content: "hello group",
         id: "msg-123",
       },
-      conversation: { id: "conversation-1" },
+      conversation: { id: "group-conv-1" },
       isDm: () => false,
+      client: xmtpMock.agent.client,
+    });
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isDm: false,
+        isGroup: true,
+        conversationId: "group-conv-1",
+      }),
+    );
+
+    await bus.close();
+  });
+
+  it("filters self-echo messages on text events", async () => {
+    const onMessage = vi.fn(async () => {});
+    xmtpMock.fromSelf.mockReturnValue(true);
+    const bus = await startXmtpBus({
+      walletKey: TEST_WALLET_KEY,
+      dbEncryptionKey: TEST_DB_KEY,
+      env: "dev",
+      dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
+      onMessage,
+    });
+
+    await xmtpMock.emit("text", {
+      getSenderAddress: async () => TEST_PEER_ADDRESS,
+      message: {
+        senderInboxId: "inbox-1",
+        content: "echo text",
+        id: "msg-echo",
+      },
+      conversation: { id: "conversation-1" },
+      isDm: () => true,
+      client: xmtpMock.agent.client,
     });
 
     expect(onMessage).not.toHaveBeenCalled();
+
+    await bus.close();
+  });
+
+  it("filters self-echo messages on reply events", async () => {
+    const onMessage = vi.fn(async () => {});
+    xmtpMock.fromSelf.mockReturnValue(true);
+    const bus = await startXmtpBus({
+      walletKey: TEST_WALLET_KEY,
+      dbEncryptionKey: TEST_DB_KEY,
+      env: "dev",
+      dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
+      onMessage,
+    });
+
+    await xmtpMock.emit("reply", {
+      getSenderAddress: async () => TEST_PEER_ADDRESS,
+      message: {
+        senderInboxId: "inbox-1",
+        content: { content: "echo reply", referenceId: "ref-1" },
+        id: "msg-echo-reply",
+      },
+      conversation: { id: "conversation-1" },
+      isDm: () => true,
+      client: xmtpMock.agent.client,
+    });
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await bus.close();
+  });
+
+  it("filters self-echo messages on markdown events", async () => {
+    const onMessage = vi.fn(async () => {});
+    xmtpMock.fromSelf.mockReturnValue(true);
+    const bus = await startXmtpBus({
+      walletKey: TEST_WALLET_KEY,
+      dbEncryptionKey: TEST_DB_KEY,
+      env: "dev",
+      dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
+      onMessage,
+    });
+
+    await xmtpMock.emit("markdown", {
+      getSenderAddress: async () => TEST_PEER_ADDRESS,
+      message: {
+        senderInboxId: "inbox-1",
+        content: "# echo markdown",
+        id: "msg-echo-md",
+      },
+      conversation: { id: "conversation-1" },
+      isDm: () => true,
+      client: xmtpMock.agent.client,
+    });
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await bus.close();
+  });
+
+  it("forwards markdown events like text events", async () => {
+    const onMessage = vi.fn(async () => {});
+    const bus = await startXmtpBus({
+      walletKey: TEST_WALLET_KEY,
+      dbEncryptionKey: TEST_DB_KEY,
+      env: "dev",
+      dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
+      onMessage,
+    });
+
+    await xmtpMock.emit("markdown", {
+      getSenderAddress: async () => TEST_PEER_ADDRESS_UPPER,
+      message: {
+        senderInboxId: "inbox-1",
+        content: "# Hello Markdown",
+        id: "msg-md-1",
+      },
+      conversation: { id: "conversation-1" },
+      isDm: () => true,
+      client: xmtpMock.agent.client,
+    });
+
+    expect(onMessage).toHaveBeenCalledWith({
+      senderAddress: TEST_PEER_ADDRESS,
+      senderInboxId: "inbox-1",
+      conversationId: "conversation-1",
+      isDm: true,
+      isGroup: false,
+      text: "# Hello Markdown",
+      messageId: "msg-md-1",
+    });
+
+    await bus.close();
+  });
+
+  it("retries agent.start() on failure with exponential backoff", async () => {
+    let callCount = 0;
+    xmtpMock.agent.start.mockImplementation(async () => {
+      callCount++;
+      if (callCount < 3) {
+        throw new Error("network error");
+      }
+    });
+
+    const onError = vi.fn();
+    const startPromise = startXmtpBus({
+      walletKey: TEST_WALLET_KEY,
+      dbEncryptionKey: TEST_DB_KEY,
+      env: "dev",
+      dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
+      onMessage: vi.fn(async () => {}),
+      onError,
+    });
+
+    // First attempt fails immediately
+    await vi.advanceTimersByTimeAsync(0);
+    // Wait for first retry delay (2s)
+    await vi.advanceTimersByTimeAsync(2000);
+    // Wait for second retry delay (4s)
+    await vi.advanceTimersByTimeAsync(4000);
+
+    const bus = await startPromise;
+
+    expect(xmtpMock.agent.start).toHaveBeenCalledTimes(3);
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), "start attempt 1/3");
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), "start attempt 2/3");
+
+    await bus.close();
+  });
+
+  it("throws after exhausting all retry attempts", async () => {
+    // Use real timers for this test since the async rejection + fake timer
+    // combination causes a spurious "unhandled rejection" warning in Node.
+    vi.useRealTimers();
+
+    xmtpMock.agent.start.mockImplementation(async () => {
+      throw new Error("persistent failure");
+    });
+
+    const onError = vi.fn();
+    await expect(
+      startXmtpBus({
+        walletKey: TEST_WALLET_KEY,
+        dbEncryptionKey: TEST_DB_KEY,
+        env: "dev",
+        dbPath: "/tmp/openclaw-xmtp-bus-test",
+        shouldConsentDm: () => true,
+        onMessage: vi.fn(async () => {}),
+        onError,
+      }),
+    ).rejects.toThrow("persistent failure");
+
+    expect(xmtpMock.agent.start).toHaveBeenCalledTimes(3);
+    expect(onError).toHaveBeenCalledTimes(3);
+  }, 30_000);
+
+  it("handles senderAddress: undefined in group messages without throwing", async () => {
+    const onMessage = vi.fn(async () => {});
+    const bus = await startXmtpBus({
+      walletKey: TEST_WALLET_KEY,
+      dbEncryptionKey: TEST_DB_KEY,
+      env: "dev",
+      dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
+      onMessage,
+    });
+
+    await xmtpMock.emit("text", {
+      getSenderAddress: async () => undefined,
+      message: {
+        senderInboxId: "inbox-unknown",
+        content: "group message",
+        id: "msg-group-1",
+      },
+      conversation: { id: "group-conv-1" },
+      isDm: () => false,
+      client: xmtpMock.agent.client,
+    });
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderAddress: undefined,
+        senderInboxId: "inbox-unknown",
+        isGroup: true,
+      }),
+    );
+
+    await bus.close();
+  });
+
+  it("getInboxId() returns the agent client inbox ID", async () => {
+    const bus = await startXmtpBus({
+      walletKey: TEST_WALLET_KEY,
+      dbEncryptionKey: TEST_DB_KEY,
+      env: "dev",
+      dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
+      onMessage: vi.fn(async () => {}),
+    });
+
+    expect(bus.getInboxId()).toBe("test-inbox-id-123");
 
     await bus.close();
   });

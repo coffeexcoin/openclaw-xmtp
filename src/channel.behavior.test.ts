@@ -16,12 +16,14 @@ const busState = vi.hoisted(() => {
   );
   const close = vi.fn(async () => {});
   const getAddress = vi.fn(() => "0xaabbccddeeff0011223344556677889900aabbcc");
+  const getInboxId = vi.fn(() => "test-inbox-id-123" as string | undefined);
   let onMessage:
     | ((params: {
-        senderAddress: string;
+        senderAddress: string | undefined;
         senderInboxId: string;
         conversationId: string;
         isDm: boolean;
+        isGroup: boolean;
         text: string;
         messageId: string;
         replyContext?: {
@@ -38,6 +40,7 @@ const busState = vi.hoisted(() => {
       sendReply,
       close,
       getAddress,
+      getInboxId,
     };
   });
 
@@ -46,6 +49,7 @@ const busState = vi.hoisted(() => {
     sendReply,
     close,
     getAddress,
+    getInboxId,
     startXmtpBus,
     getOnMessage: () => onMessage,
     reset() {
@@ -55,6 +59,8 @@ const busState = vi.hoisted(() => {
       close.mockReset();
       getAddress.mockReset();
       getAddress.mockReturnValue("0xaabbccddeeff0011223344556677889900aabbcc");
+      getInboxId.mockReset();
+      getInboxId.mockReturnValue("test-inbox-id-123");
       startXmtpBus.mockReset();
       startXmtpBus.mockImplementation(async (options: { onMessage: typeof onMessage }) => {
         onMessage = options.onMessage;
@@ -63,6 +69,7 @@ const busState = vi.hoisted(() => {
           sendReply,
           close,
           getAddress,
+          getInboxId,
         };
       });
     },
@@ -244,6 +251,10 @@ describe("xmtpPlugin behavior", () => {
   async function emitInboundMessage(
     text: string,
     options?: {
+      isDm?: boolean;
+      isGroup?: boolean;
+      conversationId?: string;
+      senderAddress?: string | undefined;
       replyContext?: {
         referenceId: string;
         referencedText?: string;
@@ -256,11 +267,15 @@ describe("xmtpPlugin behavior", () => {
       throw new Error("onMessage handler was not registered");
     }
 
+    const isDm = options?.isDm ?? true;
+    const isGroup = options?.isGroup ?? !isDm;
+
     await onMessage({
-      senderAddress: TEST_SENDER,
+      senderAddress: options && "senderAddress" in options ? options.senderAddress : TEST_SENDER,
       senderInboxId: "inbox-1",
-      conversationId: "conversation-123",
-      isDm: true,
+      conversationId: options?.conversationId ?? "conversation-123",
+      isDm,
+      isGroup,
       text,
       messageId: "xmtp-message-123",
       replyContext: options?.replyContext,
@@ -537,5 +552,119 @@ describe("xmtpPlugin behavior", () => {
       expect.stringContaining("xmtp pairing reply"),
     );
     expect(gatewayCtx.log.debug).toHaveBeenCalledWith(expect.stringContaining("xmtp inbound:"));
+  });
+
+  // --- Group policy gating tests ---
+
+  it("drops group messages when groupPolicy is disabled", async () => {
+    const cfg = createConfig({ groupPolicy: "disabled" });
+    const runtimeBundle = createRuntime(cfg);
+    const { gatewayCtx } = await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("hello group", {
+      isDm: false,
+      isGroup: true,
+      conversationId: "group-conv-1",
+    });
+
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeBundle.finalizeInboundContext).not.toHaveBeenCalled();
+    expect(gatewayCtx.log.debug).toHaveBeenCalledWith(
+      expect.stringContaining("blocked xmtp group message"),
+    );
+  });
+
+  it("allows group messages when groupPolicy is open", async () => {
+    const cfg = createConfig({ groupPolicy: "open" });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("hello open group", {
+      isDm: false,
+      isGroup: true,
+      conversationId: "group-conv-1",
+    });
+
+    expect(runtimeBundle.finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ChatType: "group",
+        From: "xmtp:group:group-conv-1",
+      }),
+    );
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+  });
+
+  it("checks groupAllowFrom when groupPolicy is allowlist", async () => {
+    const cfg = createConfig({
+      groupPolicy: "allowlist",
+      groupAllowFrom: [TEST_SENDER],
+    });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    // Allowed sender
+    await emitInboundMessage("allowed group msg", {
+      isDm: false,
+      isGroup: true,
+      conversationId: "group-conv-1",
+    });
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+
+    runtimeBundle.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeBundle.finalizeInboundContext.mockClear();
+
+    // Blocked sender
+    await emitInboundMessage("blocked group msg", {
+      isDm: false,
+      isGroup: true,
+      conversationId: "group-conv-1",
+      senderAddress: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    });
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeBundle.finalizeInboundContext).not.toHaveBeenCalled();
+  });
+
+  it("uses senderInboxId fallback when senderAddress is undefined in group messages", async () => {
+    const cfg = createConfig({ groupPolicy: "open" });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("group msg no address", {
+      isDm: false,
+      isGroup: true,
+      conversationId: "group-conv-1",
+      senderAddress: undefined,
+    });
+
+    // Should not throw, should use senderInboxId as identifier
+    expect(runtimeBundle.finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SenderId: "inbox-1",
+        SenderName: "inbox-1",
+        ChatType: "group",
+      }),
+    );
+  });
+
+  it("sets group context payload fields correctly", async () => {
+    const cfg = createConfig({ groupPolicy: "open" });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("group message", {
+      isDm: false,
+      isGroup: true,
+      conversationId: "group-conv-42",
+    });
+
+    expect(runtimeBundle.finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ChatType: "group",
+        From: "xmtp:group:group-conv-42",
+        To: "xmtp:group-conv-42",
+        ConversationLabel: "group-conv-42",
+        GroupSubject: "group-conv-42",
+      }),
+    );
   });
 });

@@ -13,6 +13,8 @@ export interface XmtpAccountConfig {
   dbPath?: string;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: string[];
+  groupPolicy?: "open" | "disabled" | "allowlist";
+  groupAllowFrom?: string[];
 }
 
 export type XmtpSecretSource = "env" | "secretFile" | "config" | "none";
@@ -43,11 +45,22 @@ function deriveAddressFromKey(walletKey: string): string {
   }
 }
 
+type XmtpChannelRawConfig = XmtpAccountConfig & {
+  accounts?: Record<string, XmtpAccountConfig>;
+};
+
 export function listXmtpAccountIds(cfg: OpenClawConfig): string[] {
   const xmtpCfg = (cfg.channels as Record<string, unknown> | undefined)?.xmtp as
-    | XmtpAccountConfig
+    | XmtpChannelRawConfig
     | undefined;
 
+  // Multi-account: if `accounts` record is present and non-empty, return its keys.
+  // Env vars do NOT create an implicit "default" in multi-account mode.
+  if (xmtpCfg?.accounts && Object.keys(xmtpCfg.accounts).length > 0) {
+    return Object.keys(xmtpCfg.accounts);
+  }
+
+  // Single-account fallback: check top-level config fields + env vars
   const hasConfig =
     Boolean(xmtpCfg?.walletKey?.trim()) ||
     Boolean(xmtpCfg?.walletKeyFile?.trim()) ||
@@ -78,12 +91,19 @@ export function resolveXmtpAccount(opts: {
 }): ResolvedXmtpAccount {
   const accountId = opts.accountId ?? DEFAULT_ACCOUNT_ID;
   const xmtpCfg = (opts.cfg.channels as Record<string, unknown> | undefined)?.xmtp as
-    | XmtpAccountConfig
+    | XmtpChannelRawConfig
     | undefined;
 
-  const baseEnabled = xmtpCfg?.enabled !== false;
-  const walletKeyResolution = resolveWalletKey(accountId, xmtpCfg);
-  const dbEncryptionKeyResolution = resolveDbEncryptionKey(accountId, xmtpCfg);
+  // Extract top-level account fields (strip `accounts` key)
+  const { accounts: _accounts, ...topLevelFields } = xmtpCfg ?? {};
+
+  // Merge per-account overrides on top
+  const accountOverrides = _accounts?.[accountId] ?? {};
+  const merged: XmtpAccountConfig = { ...topLevelFields, ...accountOverrides };
+
+  const baseEnabled = merged.enabled !== false;
+  const walletKeyResolution = resolveWalletKey(accountId, merged);
+  const dbEncryptionKeyResolution = resolveDbEncryptionKey(accountId, merged);
   const configured = Boolean(walletKeyResolution.secret && dbEncryptionKeyResolution.secret);
 
   let address = "";
@@ -93,7 +113,7 @@ export function resolveXmtpAccount(opts: {
 
   return {
     accountId,
-    name: xmtpCfg?.name?.trim() || undefined,
+    name: merged.name?.trim() || undefined,
     enabled: baseEnabled,
     configured,
     walletKey: walletKeyResolution.secret,
@@ -101,18 +121,20 @@ export function resolveXmtpAccount(opts: {
     dbEncryptionKey: dbEncryptionKeyResolution.secret,
     dbEncryptionKeySource: dbEncryptionKeyResolution.source,
     address,
-    env: xmtpCfg?.env ?? DEFAULT_ENV,
+    env: merged.env ?? DEFAULT_ENV,
     config: {
-      enabled: xmtpCfg?.enabled,
-      name: xmtpCfg?.name,
-      walletKey: xmtpCfg?.walletKey,
-      walletKeyFile: xmtpCfg?.walletKeyFile,
-      dbEncryptionKey: xmtpCfg?.dbEncryptionKey,
-      dbEncryptionKeyFile: xmtpCfg?.dbEncryptionKeyFile,
-      env: xmtpCfg?.env,
-      dbPath: xmtpCfg?.dbPath,
-      dmPolicy: xmtpCfg?.dmPolicy,
-      allowFrom: xmtpCfg?.allowFrom,
+      enabled: merged.enabled,
+      name: merged.name,
+      walletKey: merged.walletKey,
+      walletKeyFile: merged.walletKeyFile,
+      dbEncryptionKey: merged.dbEncryptionKey,
+      dbEncryptionKeyFile: merged.dbEncryptionKeyFile,
+      env: merged.env,
+      dbPath: merged.dbPath,
+      dmPolicy: merged.dmPolicy,
+      allowFrom: merged.allowFrom,
+      groupPolicy: merged.groupPolicy,
+      groupAllowFrom: merged.groupAllowFrom,
     },
   };
 }

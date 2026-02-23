@@ -19,11 +19,11 @@ describe("xmtpPlugin", () => {
       expect(xmtpPlugin.capabilities.chatTypes).toContain("direct");
     });
 
-    it("does not support groups (Phase 1)", () => {
-      expect(xmtpPlugin.capabilities.chatTypes).not.toContain("group");
+    it("supports group messages", () => {
+      expect(xmtpPlugin.capabilities.chatTypes).toContain("group");
     });
 
-    it("does not support media (Phase 1)", () => {
+    it("does not support media", () => {
       expect(xmtpPlugin.capabilities.media).toBe(false);
     });
 
@@ -170,6 +170,10 @@ describe("xmtpPlugin", () => {
   describe("gateway", () => {
     it("has startAccount function", () => {
       expect(xmtpPlugin.gateway?.startAccount).toBeTypeOf("function");
+    });
+
+    it("has stopAccount function", () => {
+      expect(xmtpPlugin.gateway?.stopAccount).toBeTypeOf("function");
     });
   });
 

@@ -25,6 +25,10 @@ import { normalizeEthAddress, startXmtpBus, type XmtpBusHandle } from "./xmtp-bu
 
 const activeBuses = new Map<string, XmtpBusHandle>();
 
+export function getActiveBuses(): ReadonlyMap<string, XmtpBusHandle> {
+  return new Map(activeBuses);
+}
+
 function normalizeAllowEntry(entry: string): string {
   const trimmed = entry.trim();
   if (!trimmed) {
@@ -62,7 +66,7 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
     order: 101,
   },
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     media: false,
     reply: true,
   },
@@ -83,6 +87,8 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
       secretSource: account.dbEncryptionKeySource,
       dmPolicy: account.config.dmPolicy,
       allowFrom: account.config.allowFrom,
+      groupPolicy: account.config.groupPolicy,
+      groupAllowFrom: account.config.groupAllowFrom,
       dbPath: account.config.dbPath ?? null,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
@@ -222,6 +228,8 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
       secretSource: account.dbEncryptionKeySource,
       dmPolicy: account.config.dmPolicy,
       allowFrom: account.config.allowFrom,
+      groupPolicy: account.config.groupPolicy,
+      groupAllowFrom: account.config.groupAllowFrom,
       dbPath: account.config.dbPath ?? null,
       running: runtime?.running ?? false,
       lastStartAt: runtime?.lastStartAt ?? null,
@@ -241,6 +249,8 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
         secretSource: account.dbEncryptionKeySource,
         dmPolicy: account.config.dmPolicy,
         allowFrom: account.config.allowFrom,
+        groupPolicy: account.config.groupPolicy,
+        groupAllowFrom: account.config.groupAllowFrom,
         dbPath: account.config.dbPath ?? null,
       });
       ctx.log?.info(
@@ -276,6 +286,8 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
           senderAddress,
           senderInboxId,
           conversationId,
+          isDm,
+          isGroup,
           text,
           messageId,
           replyContext,
@@ -297,204 +309,415 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
             cfg,
             accountId: account.accountId,
           });
-          const dmPolicy = freshAccount.config.dmPolicy ?? "pairing";
-          const configuredAllowFrom = normalizeAllowEntries(freshAccount.config.allowFrom ?? []);
-          const storeAllowFrom = normalizeAllowEntries(
-            await runtime.channel.pairing
-              .readAllowFromStore("xmtp", process.env, account.accountId)
-              .catch((error) => {
-                ctx.log?.warn?.(
-                  `[${account.accountId}] Failed to read pairing store: ${String(error)}`,
-                );
-                return [];
-              }),
-          );
-          const effectiveAllowFrom = [...configuredAllowFrom, ...storeAllowFrom];
-          const allowMatch = resolveAllowlistMatchSimple({
-            allowFrom: effectiveAllowFrom,
-            senderId: senderAddress,
-          });
-          const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
 
-          if (dmPolicy === "disabled") {
-            ctx.log?.debug?.(`[${account.accountId}] blocked xmtp DM ${senderAddress} (disabled)`);
-            return;
-          }
+          // Use senderAddress if available, fall back to senderInboxId for display/routing
+          const effectiveSenderIdentifier = senderAddress ?? senderInboxId;
 
-          if (dmPolicy !== "open" && !allowMatch.allowed) {
-            if (dmPolicy === "pairing") {
-              try {
-                const { code, created } = await runtime.channel.pairing.upsertPairingRequest({
-                  channel: "xmtp",
-                  id: senderAddress,
-                  accountId: account.accountId,
-                  meta: {
-                    inboxId: senderInboxId,
-                  },
-                });
-                if (created) {
-                  ctx.log?.info?.(
-                    `[${account.accountId}] xmtp pairing request from ${senderAddress} (${allowMatchMeta})`,
+          // --- DM policy gating ---
+          if (isDm) {
+            const dmPolicy = freshAccount.config.dmPolicy ?? "pairing";
+            const configuredAllowFrom = normalizeAllowEntries(freshAccount.config.allowFrom ?? []);
+            const storeAllowFrom = normalizeAllowEntries(
+              await runtime.channel.pairing
+                .readAllowFromStore("xmtp", process.env, account.accountId)
+                .catch((error) => {
+                  ctx.log?.warn?.(
+                    `[${account.accountId}] Failed to read pairing store: ${String(error)}`,
                   );
-                  const reply = runtime.channel.pairing.buildPairingReply({
+                  return [];
+                }),
+            );
+            const effectiveAllowFrom = [...configuredAllowFrom, ...storeAllowFrom];
+            const allowMatch = resolveAllowlistMatchSimple({
+              allowFrom: effectiveAllowFrom,
+              senderId: effectiveSenderIdentifier,
+            });
+            const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
+
+            if (dmPolicy === "disabled") {
+              ctx.log?.debug?.(
+                `[${account.accountId}] blocked xmtp DM ${effectiveSenderIdentifier} (disabled)`,
+              );
+              return;
+            }
+
+            if (dmPolicy !== "open" && !allowMatch.allowed) {
+              if (dmPolicy === "pairing") {
+                try {
+                  const { code, created } = await runtime.channel.pairing.upsertPairingRequest({
                     channel: "xmtp",
-                    idLine: `Your XMTP address: ${senderAddress}`,
-                    code,
-                  });
-                  await bus.sendText(conversationId, reply);
-                  runtime.channel.activity.record({
-                    channel: "xmtp",
+                    id: effectiveSenderIdentifier,
                     accountId: account.accountId,
-                    direction: "outbound",
+                    meta: {
+                      inboxId: senderInboxId,
+                    },
                   });
-                  ctx.log?.debug?.(
-                    `[${account.accountId}] xmtp pairing reply to=${conversationId} len=${reply.length}`,
+                  if (created) {
+                    ctx.log?.info?.(
+                      `[${account.accountId}] xmtp pairing request from ${effectiveSenderIdentifier} (${allowMatchMeta})`,
+                    );
+                    const reply = runtime.channel.pairing.buildPairingReply({
+                      channel: "xmtp",
+                      idLine: `Your XMTP address: ${effectiveSenderIdentifier}`,
+                      code,
+                    });
+                    await bus.sendText(conversationId, reply);
+                    runtime.channel.activity.record({
+                      channel: "xmtp",
+                      accountId: account.accountId,
+                      direction: "outbound",
+                    });
+                    ctx.log?.debug?.(
+                      `[${account.accountId}] xmtp pairing reply to=${conversationId} len=${reply.length}`,
+                    );
+                  }
+                } catch (err) {
+                  ctx.log?.error?.(
+                    `[${account.accountId}] xmtp pairing reply failed for ${effectiveSenderIdentifier}: ${String(err)}`,
                   );
                 }
-              } catch (err) {
-                ctx.log?.error?.(
-                  `[${account.accountId}] xmtp pairing reply failed for ${senderAddress}: ${String(err)}`,
+              } else {
+                ctx.log?.debug?.(
+                  `[${account.accountId}] blocked unauthorized xmtp sender ${effectiveSenderIdentifier} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
                 );
               }
-            } else {
-              ctx.log?.debug?.(
-                `[${account.accountId}] blocked unauthorized xmtp sender ${senderAddress} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
-              );
+              return;
             }
-            return;
-          }
 
-          const allowTextCommands = runtime.channel.commands.shouldHandleTextCommands({
-            cfg,
-            surface: "xmtp",
-          });
-          const hasControlCommand = runtime.channel.commands.isControlCommandMessage(rawBody, cfg);
-          const commandGate = resolveControlCommandGate({
-            useAccessGroups: cfg.commands?.useAccessGroups !== false,
-            authorizers: [
-              {
-                configured: effectiveAllowFrom.length > 0,
-                allowed: allowMatch.allowed,
-              },
-            ],
-            allowTextCommands,
-            hasControlCommand,
-          });
-
-          if (commandGate.shouldBlock) {
-            ctx.log?.debug?.(
-              `[${account.accountId}] blocked xmtp control command from ${senderAddress} (${allowMatchMeta})`,
+            // DM command gating
+            const allowTextCommands = runtime.channel.commands.shouldHandleTextCommands({
+              cfg,
+              surface: "xmtp",
+            });
+            const hasControlCommand = runtime.channel.commands.isControlCommandMessage(
+              rawBody,
+              cfg,
             );
+            const commandGate = resolveControlCommandGate({
+              useAccessGroups: cfg.commands?.useAccessGroups !== false,
+              authorizers: [
+                {
+                  configured: effectiveAllowFrom.length > 0,
+                  allowed: allowMatch.allowed,
+                },
+              ],
+              allowTextCommands,
+              hasControlCommand,
+            });
+
+            if (commandGate.shouldBlock) {
+              ctx.log?.debug?.(
+                `[${account.accountId}] blocked xmtp control command from ${effectiveSenderIdentifier} (${allowMatchMeta})`,
+              );
+              return;
+            }
+
+            // Build context and dispatch for DM
+            const route = runtime.channel.routing.resolveAgentRoute({
+              cfg,
+              channel: "xmtp",
+              accountId: account.accountId,
+              peer: { kind: "direct", id: effectiveSenderIdentifier },
+            });
+
+            const envelopeOptions = runtime.channel.reply.resolveEnvelopeFormatOptions(cfg);
+            const body = runtime.channel.reply.formatAgentEnvelope({
+              channel: "XMTP",
+              from: effectiveSenderIdentifier,
+              envelope: envelopeOptions,
+              body: rawBody,
+            });
+
+            const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+              Body: body,
+              BodyForAgent: rawBody,
+              RawBody: rawBody,
+              CommandBody: rawBody,
+              From: `xmtp:${effectiveSenderIdentifier}`,
+              To: `xmtp:${account.address}`,
+              SessionKey: route.sessionKey,
+              AccountId: route.accountId,
+              ChatType: "direct" as const,
+              ConversationLabel: effectiveSenderIdentifier,
+              SenderName: effectiveSenderIdentifier,
+              SenderId: effectiveSenderIdentifier,
+              Provider: "xmtp",
+              Surface: "xmtp",
+              MessageSid: messageId,
+              MessageSidFull: messageId,
+              ReplyToId: replyContext?.referenceId,
+              ReplyToIdFull: replyContext?.referenceId,
+              ReplyToBody: replyContext?.referencedText,
+              OriginatingChannel: "xmtp",
+              OriginatingTo: `xmtp:${account.address}`,
+              CommandAuthorized: commandGate.commandAuthorized,
+            });
+
+            ctx.log?.debug?.(
+              `[${account.accountId}] xmtp inbound: sender=${effectiveSenderIdentifier} sid=${messageId} len=${rawBody.length} ${allowMatchMeta} preview="${previewText(rawBody)}"`,
+            );
+
+            const storePath = runtime.channel.session.resolveStorePath(cfg.session?.store, {
+              agentId: route.agentId,
+            });
+            await runtime.channel.session.recordInboundSession({
+              storePath,
+              sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+              ctx: ctxPayload,
+              onRecordError: (err) => {
+                ctx.log?.error?.(`[${account.accountId}] session record failed: ${String(err)}`);
+              },
+            });
+
+            const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+              cfg,
+              channel: "xmtp",
+              accountId: account.accountId,
+            });
+
+            const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+              cfg,
+              agentId: route.agentId,
+              channel: "xmtp",
+              accountId: account.accountId,
+            });
+
+            await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+              ctx: ctxPayload,
+              cfg,
+              dispatcherOptions: {
+                ...prefixOptions,
+                deliver: async (payload: ReplyPayload) => {
+                  const message = runtime.channel.text.convertMarkdownTables(
+                    payload.text ?? "",
+                    tableMode,
+                  );
+                  if (message) {
+                    const replyTarget =
+                      typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+                    if (replyTarget) {
+                      await bus.sendReply(conversationId, message, replyTarget);
+                    } else {
+                      await bus.sendText(conversationId, message);
+                    }
+                    runtime.channel.activity.record({
+                      channel: "xmtp",
+                      accountId: account.accountId,
+                      direction: "outbound",
+                    });
+                    ctx.log?.debug?.(
+                      `[${account.accountId}] xmtp outbound: to=${conversationId} len=${message.length} preview="${previewText(message, 160)}"`,
+                    );
+                  }
+                },
+                onError: (err, info) => {
+                  ctx.log?.error?.(
+                    `[${account.accountId}] xmtp ${info.kind} reply failed: ${String(err)}`,
+                  );
+                },
+              },
+              replyOptions: {
+                onModelSelected,
+              },
+            });
+
             return;
           }
 
-          const route = runtime.channel.routing.resolveAgentRoute({
-            cfg,
-            channel: "xmtp",
-            accountId: account.accountId,
-            peer: { kind: "direct", id: senderAddress },
-          });
+          // --- Group policy gating ---
+          if (isGroup) {
+            const groupPolicy = freshAccount.config.groupPolicy ?? "open";
 
-          const envelopeOptions = runtime.channel.reply.resolveEnvelopeFormatOptions(cfg);
-          const body = runtime.channel.reply.formatAgentEnvelope({
-            channel: "XMTP",
-            from: senderAddress,
-            envelope: envelopeOptions,
-            body: rawBody,
-          });
+            if (groupPolicy === "disabled") {
+              ctx.log?.debug?.(
+                `[${account.accountId}] blocked xmtp group message in ${conversationId} (groupPolicy=disabled)`,
+              );
+              return;
+            }
 
-          const ctxPayload = runtime.channel.reply.finalizeInboundContext({
-            Body: body,
-            BodyForAgent: rawBody,
-            RawBody: rawBody,
-            CommandBody: rawBody,
-            From: `xmtp:${senderAddress}`,
-            To: `xmtp:${account.address}`,
-            SessionKey: route.sessionKey,
-            AccountId: route.accountId,
-            ChatType: "direct" as const,
-            ConversationLabel: senderAddress,
-            SenderName: senderAddress,
-            SenderId: senderAddress,
-            Provider: "xmtp",
-            Surface: "xmtp",
-            MessageSid: messageId,
-            MessageSidFull: messageId,
-            ReplyToId: replyContext?.referenceId,
-            ReplyToIdFull: replyContext?.referenceId,
-            ReplyToBody: replyContext?.referencedText,
-            OriginatingChannel: "xmtp",
-            OriginatingTo: `xmtp:${account.address}`,
-            CommandAuthorized: commandGate.commandAuthorized,
-          });
+            if (groupPolicy === "allowlist") {
+              const configuredGroupAllowFrom = normalizeAllowEntries(
+                freshAccount.config.groupAllowFrom ?? [],
+              );
+              const storeAllowFrom = normalizeAllowEntries(
+                await runtime.channel.pairing
+                  .readAllowFromStore("xmtp", process.env, account.accountId)
+                  .catch((error) => {
+                    ctx.log?.warn?.(
+                      `[${account.accountId}] Failed to read pairing store: ${String(error)}`,
+                    );
+                    return [];
+                  }),
+              );
+              const effectiveGroupAllowFrom = [...configuredGroupAllowFrom, ...storeAllowFrom];
+              const groupAllowMatch = resolveAllowlistMatchSimple({
+                allowFrom: effectiveGroupAllowFrom,
+                senderId: effectiveSenderIdentifier,
+              });
 
-          ctx.log?.debug?.(
-            `[${account.accountId}] xmtp inbound: sender=${senderAddress} sid=${messageId} len=${rawBody.length} ${allowMatchMeta} preview="${previewText(rawBody)}"`,
-          );
-
-          const storePath = runtime.channel.session.resolveStorePath(cfg.session?.store, {
-            agentId: route.agentId,
-          });
-          await runtime.channel.session.recordInboundSession({
-            storePath,
-            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-            ctx: ctxPayload,
-            onRecordError: (err) => {
-              ctx.log?.error?.(`[${account.accountId}] session record failed: ${String(err)}`);
-            },
-          });
-
-          const tableMode = runtime.channel.text.resolveMarkdownTableMode({
-            cfg,
-            channel: "xmtp",
-            accountId: account.accountId,
-          });
-
-          const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-            cfg,
-            agentId: route.agentId,
-            channel: "xmtp",
-            accountId: account.accountId,
-          });
-
-          await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: ctxPayload,
-            cfg,
-            dispatcherOptions: {
-              ...prefixOptions,
-              deliver: async (payload: ReplyPayload) => {
-                const message = runtime.channel.text.convertMarkdownTables(
-                  payload.text ?? "",
-                  tableMode,
+              if (!groupAllowMatch.allowed) {
+                const groupAllowMatchMeta = formatAllowlistMatchMeta(groupAllowMatch);
+                ctx.log?.debug?.(
+                  `[${account.accountId}] blocked xmtp group sender ${effectiveSenderIdentifier} in ${conversationId} (groupPolicy=allowlist, ${groupAllowMatchMeta})`,
                 );
-                if (message) {
-                  const replyTarget =
-                    typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
-                  if (replyTarget) {
-                    await bus.sendReply(conversationId, message, replyTarget);
-                  } else {
-                    await bus.sendText(conversationId, message);
-                  }
-                  runtime.channel.activity.record({
-                    channel: "xmtp",
-                    accountId: account.accountId,
-                    direction: "outbound",
-                  });
-                  ctx.log?.debug?.(
-                    `[${account.accountId}] xmtp outbound: to=${conversationId} len=${message.length} preview="${previewText(message, 160)}"`,
+                return;
+              }
+            }
+
+            // Group command gating: use groupAllowFrom for authorization
+            const configuredGroupAllowFrom = normalizeAllowEntries(
+              freshAccount.config.groupAllowFrom ?? [],
+            );
+            const storeAllowFrom = normalizeAllowEntries(
+              await runtime.channel.pairing
+                .readAllowFromStore("xmtp", process.env, account.accountId)
+                .catch(() => []),
+            );
+            const effectiveGroupAllowFrom = [...configuredGroupAllowFrom, ...storeAllowFrom];
+            const groupAllowMatch = resolveAllowlistMatchSimple({
+              allowFrom: effectiveGroupAllowFrom,
+              senderId: effectiveSenderIdentifier,
+            });
+
+            const allowTextCommands = runtime.channel.commands.shouldHandleTextCommands({
+              cfg,
+              surface: "xmtp",
+            });
+            const hasControlCommand = runtime.channel.commands.isControlCommandMessage(
+              rawBody,
+              cfg,
+            );
+            const commandGate = resolveControlCommandGate({
+              useAccessGroups: cfg.commands?.useAccessGroups !== false,
+              authorizers: [
+                {
+                  configured: effectiveGroupAllowFrom.length > 0,
+                  allowed: groupAllowMatch.allowed,
+                },
+              ],
+              allowTextCommands,
+              hasControlCommand,
+            });
+
+            if (commandGate.shouldBlock) {
+              const groupAllowMatchMeta = formatAllowlistMatchMeta(groupAllowMatch);
+              ctx.log?.debug?.(
+                `[${account.accountId}] blocked xmtp group control command from ${effectiveSenderIdentifier} in ${conversationId} (${groupAllowMatchMeta})`,
+              );
+              return;
+            }
+
+            // Build context and dispatch for group
+            const route = runtime.channel.routing.resolveAgentRoute({
+              cfg,
+              channel: "xmtp",
+              accountId: account.accountId,
+              peer: { kind: "group", id: conversationId },
+            });
+
+            const envelopeOptions = runtime.channel.reply.resolveEnvelopeFormatOptions(cfg);
+            const body = runtime.channel.reply.formatAgentEnvelope({
+              channel: "XMTP",
+              from: effectiveSenderIdentifier,
+              envelope: envelopeOptions,
+              body: rawBody,
+            });
+
+            const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+              Body: body,
+              BodyForAgent: rawBody,
+              RawBody: rawBody,
+              CommandBody: rawBody,
+              From: `xmtp:group:${conversationId}`,
+              To: `xmtp:${conversationId}`,
+              SessionKey: route.sessionKey,
+              AccountId: route.accountId,
+              ChatType: "group" as const,
+              ConversationLabel: conversationId,
+              GroupSubject: conversationId,
+              SenderName: effectiveSenderIdentifier,
+              SenderId: effectiveSenderIdentifier,
+              Provider: "xmtp",
+              Surface: "xmtp",
+              MessageSid: messageId,
+              MessageSidFull: messageId,
+              ReplyToId: replyContext?.referenceId,
+              ReplyToIdFull: replyContext?.referenceId,
+              ReplyToBody: replyContext?.referencedText,
+              OriginatingChannel: "xmtp",
+              OriginatingTo: `xmtp:${conversationId}`,
+              CommandAuthorized: commandGate.commandAuthorized,
+            });
+
+            const groupAllowMatchMeta = formatAllowlistMatchMeta(groupAllowMatch);
+            ctx.log?.debug?.(
+              `[${account.accountId}] xmtp group inbound: sender=${effectiveSenderIdentifier} conversation=${conversationId} sid=${messageId} len=${rawBody.length} ${groupAllowMatchMeta} preview="${previewText(rawBody)}"`,
+            );
+
+            const storePath = runtime.channel.session.resolveStorePath(cfg.session?.store, {
+              agentId: route.agentId,
+            });
+            await runtime.channel.session.recordInboundSession({
+              storePath,
+              sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+              ctx: ctxPayload,
+              onRecordError: (err) => {
+                ctx.log?.error?.(`[${account.accountId}] session record failed: ${String(err)}`);
+              },
+            });
+
+            const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+              cfg,
+              channel: "xmtp",
+              accountId: account.accountId,
+            });
+
+            const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+              cfg,
+              agentId: route.agentId,
+              channel: "xmtp",
+              accountId: account.accountId,
+            });
+
+            await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+              ctx: ctxPayload,
+              cfg,
+              dispatcherOptions: {
+                ...prefixOptions,
+                deliver: async (payload: ReplyPayload) => {
+                  const message = runtime.channel.text.convertMarkdownTables(
+                    payload.text ?? "",
+                    tableMode,
                   );
-                }
+                  if (message) {
+                    const replyTarget =
+                      typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+                    if (replyTarget) {
+                      await bus.sendReply(conversationId, message, replyTarget);
+                    } else {
+                      await bus.sendText(conversationId, message);
+                    }
+                    runtime.channel.activity.record({
+                      channel: "xmtp",
+                      accountId: account.accountId,
+                      direction: "outbound",
+                    });
+                    ctx.log?.debug?.(
+                      `[${account.accountId}] xmtp outbound: to=${conversationId} len=${message.length} preview="${previewText(message, 160)}"`,
+                    );
+                  }
+                },
+                onError: (err, info) => {
+                  ctx.log?.error?.(
+                    `[${account.accountId}] xmtp ${info.kind} reply failed: ${String(err)}`,
+                  );
+                },
               },
-              onError: (err, info) => {
-                ctx.log?.error?.(
-                  `[${account.accountId}] xmtp ${info.kind} reply failed: ${String(err)}`,
-                );
+              replyOptions: {
+                onModelSelected,
               },
-            },
-            replyOptions: {
-              onModelSelected,
-            },
-          });
+            });
+          }
         },
         onError: (error, context) => {
           ctx.log?.error?.(`[${account.accountId}] XMTP error (${context}): ${error.message}`);
@@ -522,6 +745,18 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
       await bus.close();
       activeBuses.delete(account.accountId);
       ctx.log?.info(`[${account.accountId}] XMTP provider stopped`);
+    },
+
+    stopAccount: async (ctx) => {
+      const aid =
+        (ctx as { account?: { accountId?: string } }).account?.accountId ??
+        (ctx as { accountId?: string }).accountId;
+      if (!aid) return;
+      const bus = activeBuses.get(aid);
+      if (bus) {
+        await bus.close();
+        activeBuses.delete(aid);
+      }
     },
   },
 };

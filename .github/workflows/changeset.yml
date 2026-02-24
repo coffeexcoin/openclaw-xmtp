@@ -1,0 +1,32 @@
+name: Changeset
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  changeset:
+    name: Changeset
+    permissions:
+      pull-requests: write
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v6
+
+      - name: Set up node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Create Release Pull Request
+        uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

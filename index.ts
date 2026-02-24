@@ -17,6 +17,7 @@ const plugin = {
       api.registerCommand({
         name,
         description: command.description,
+        acceptsArgs: command.acceptsArgs,
         handler: command.handler,
       });
     }

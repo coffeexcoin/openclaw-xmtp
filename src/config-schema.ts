@@ -1,6 +1,15 @@
 import { MarkdownConfigSchema, buildChannelConfigSchema } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
+export const Erc8004ConfigSchema = z
+  .object({
+    tokenUri: z.string().optional(),
+    defaultChains: z.array(z.union([z.string(), z.number()])).optional(),
+    rpcUrls: z.record(z.string(), z.string()).optional(),
+    registryAddresses: z.record(z.string(), z.string()).optional(),
+  })
+  .optional();
+
 export const XmtpAccountFieldsSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
@@ -17,6 +26,8 @@ export const XmtpAccountFieldsSchema = z.object({
 
   groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
   groupAllowFrom: z.array(z.string()).optional(),
+
+  erc8004: Erc8004ConfigSchema,
 });
 
 export const XmtpConfigSchema = XmtpAccountFieldsSchema.extend({

@@ -1,0 +1,1 @@
+export const DEFAULT_ERC8004_REGISTRY_ADDRESS = "0x8004fb056e7e6a2ad1ad0c079aecf82f95ca3e6d";

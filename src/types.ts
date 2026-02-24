@@ -15,6 +15,12 @@ export interface XmtpAccountConfig {
   allowFrom?: string[];
   groupPolicy?: "open" | "disabled" | "allowlist";
   groupAllowFrom?: string[];
+  erc8004?: {
+    tokenUri?: string;
+    defaultChains?: Array<string | number>;
+    rpcUrls?: Record<string, string>;
+    registryAddresses?: Record<string, string>;
+  };
 }
 
 export type XmtpSecretSource = "env" | "secretFile" | "config" | "none";
@@ -135,6 +141,7 @@ export function resolveXmtpAccount(opts: {
       allowFrom: merged.allowFrom,
       groupPolicy: merged.groupPolicy,
       groupAllowFrom: merged.groupAllowFrom,
+      erc8004: merged.erc8004,
     },
   };
 }

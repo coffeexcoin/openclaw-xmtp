@@ -131,6 +131,7 @@ describe("resolveXmtpAccount", () => {
       allowFrom: ["0x1234567890abcdef1234567890abcdef12345678"],
       groupPolicy: undefined,
       groupAllowFrom: undefined,
+      erc8004: undefined,
     });
   });
 

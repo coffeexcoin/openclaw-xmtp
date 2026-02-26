@@ -1,6 +1,6 @@
 {
   "name": "@coffeexdev/xmtp",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "description": "OpenClaw XMTP channel plugin for E2E encrypted wallet-to-wallet messaging",
   "keywords": [
     "channel",

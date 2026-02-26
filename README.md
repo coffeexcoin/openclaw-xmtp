@@ -10,13 +10,14 @@ XMTP channel plugin for [OpenClaw](https://github.com/open-claw/openclaw) — ad
 - **DM Policies** — Configurable policies: `open`, `pairing`, `allowlist`, `disabled`
 - **Group Policies** — Configurable group policies: `open`, `allowlist`, `disabled`
 - **Multi-Account Support** — Run multiple XMTP accounts via `channels.xmtp.accounts`
-- **Slash Commands** — `/xmtp-address` and `/xmtp-groups`
+- **Slash Commands** — `/xmtp-address`, `/xmtp-groups`, and `/xmtp-8004-register`
 - **Self-Echo Filtering** — Drops messages sent by the agent itself
 - **Markdown Inbound Handler** — Handles XMTP `markdown` events (e.g. Converse clients)
 - **Startup Retry** — Retries XMTP agent startup with exponential backoff
 - **Allowlists** — Separate DM (`allowFrom`) and group (`groupAllowFrom`) allowlists
 - **Activity Tracking** — Inbound/outbound message activity recording
 - **Markdown Tables** — Automatic markdown table conversion for XMTP clients
+- **ERC-8004 Registration** — Register the XMTP agent wallet on ERC-8004 registry chains
 
 ## Installation & Setup
 
@@ -135,6 +136,19 @@ channels:
     groupAllowFrom:
       - "0x1234567890abcdef1234567890abcdef12345678"
 
+    # Optional ERC-8004 defaults (all fields optional)
+    erc8004:
+      # Optional default token URI. If omitted, /xmtp-8004-register auto-generates one.
+      # tokenUri: "ipfs://bafy..."
+      # Optional default target chains. If omitted, defaults to Ethereum mainnet.
+      # defaultChains: ["mainnet", "base"]
+      # Optional RPC overrides by chain name/id (otherwise uses viem chain default public RPC)
+      # rpcUrls:
+      #   "1": "https://eth.llamarpc.com"
+      # Optional registry address overrides by chain name/id
+      # registryAddresses:
+      #   "1": "0x8004fb056e7e6a2ad1ad0c079aecf82f95ca3e6d"
+
     # Custom database path (optional)
     # dbPath: "~/.openclaw/state/channels/xmtp/production"
 ```
@@ -163,6 +177,10 @@ channels:
         groupPolicy: allowlist
         groupAllowFrom:
           - "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+        erc8004:
+          defaultChains: ["mainnet", "abstract"]
+          rpcUrls:
+            "2741": "https://api.mainnet.abs.xyz"
 ```
 
 Behavior in multi-account mode:
@@ -199,10 +217,23 @@ When `accounts` is present, env vars can still provide missing secrets for those
 
 ## Commands
 
-| Command         | Description                                                              |
-| --------------- | ------------------------------------------------------------------------ |
-| `/xmtp-address` | Show connected XMTP account IDs, wallet addresses, and inbox IDs         |
-| `/xmtp-groups`  | List connected XMTP accounts (use XMTP client apps for full group lists) |
+| Command               | Description                                                              |
+| --------------------- | ------------------------------------------------------------------------ |
+| `/xmtp-address`       | Show connected XMTP account IDs, wallet addresses, and inbox IDs         |
+| `/xmtp-groups`        | List connected XMTP accounts (use XMTP client apps for full group lists) |
+| `/xmtp-8004-register` | Register the XMTP agent wallet in ERC-8004 on one or more chains         |
+
+`/xmtp-8004-register` options:
+
+- `--chains <csv>`: chain names/ids (example: `mainnet,base` or `1,8453`)
+- `--token-uri <uri>`: optional token URI (if omitted, command auto-generates a metadata URI)
+- `--account <id>`: optional account ID override
+- `--dry-run`: validate chain/RPC/fee resolution without sending transactions
+
+Defaults:
+
+- Chain defaults to Ethereum mainnet (`1`) when not provided in args/config.
+- RPC defaults to viem chain definition public RPC when no custom RPC override is configured.
 
 ## Runtime Notes
 

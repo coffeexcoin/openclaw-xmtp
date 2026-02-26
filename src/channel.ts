@@ -14,6 +14,7 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk";
 import { XmtpConfigSchema } from "./config-schema.js";
+import { xmtpOnboardingAdapter } from "./onboarding.js";
 import { getXmtpRuntime } from "./runtime.js";
 import {
   listXmtpAccountIds,
@@ -72,6 +73,7 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
   },
   reload: { configPrefixes: ["channels.xmtp"] },
   configSchema: buildChannelConfigSchema(XmtpConfigSchema),
+  onboarding: xmtpOnboardingAdapter,
 
   config: {
     listAccountIds: (cfg) => listXmtpAccountIds(cfg),

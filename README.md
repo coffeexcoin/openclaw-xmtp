@@ -18,21 +18,90 @@ XMTP channel plugin for [OpenClaw](https://github.com/open-claw/openclaw) — ad
 - **Activity Tracking** — Inbound/outbound message activity recording
 - **Markdown Tables** — Automatic markdown table conversion for XMTP clients
 
-## Installation
+## Installation & Setup
+
+The easiest way to install and configure XMTP is through the OpenClaw setup wizard.
+
+First, add the XMTP plugin to your local catalog so the wizard can discover it. Create `~/.openclaw/plugins/catalog.json`:
+
+```json
+{
+  "entries": [
+    {
+      "name": "@coffeexdev/xmtp",
+      "openclaw": {
+        "extensions": ["./index.ts"],
+        "channel": {
+          "id": "xmtp",
+          "label": "XMTP",
+          "selectionLabel": "XMTP (E2E Encrypted DMs)",
+          "docsPath": "/channels/xmtp",
+          "docsLabel": "xmtp",
+          "blurb": "E2E encrypted messaging via XMTP protocol; wallet-to-wallet.",
+          "order": 101,
+          "quickstartAllowFrom": true
+        },
+        "install": {
+          "npmSpec": "@coffeexdev/xmtp",
+          "localPath": "extensions/xmtp",
+          "defaultChoice": "npm"
+        }
+      }
+    }
+  ]
+}
+```
+
+Then run the setup wizard:
+
+```bash
+openclaw configure --section channels
+```
+
+1. Select **Configure** when prompted for channel mode
+2. Select **XMTP** from the channel list — it appears as `XMTP (plugin · install)`
+3. Choose an install method:
+   - **Download from npm** (`@coffeexdev/xmtp`) — default, recommended
+   - **Use local plugin path** (`extensions/xmtp`) — for development
+   - **Skip for now**
+4. The wizard walks you through XMTP-specific configuration:
+   - **Wallet key** — generate a new wallet, paste an existing private key, or provide a key file path
+   - **DB encryption key** — generate, paste, or provide a key file path
+   - **XMTP environment** — production (default), dev, or local
+5. Configure **DM policy**:
+   - **Pairing** (default) — unknown senders receive a pairing code, approved via `openclaw pairing approve xmtp <code>`
+   - **Allowlist** — only specific wallet addresses can DM
+   - **Open** — accept DMs from anyone
+   - **Disabled** — ignore all DMs
+6. Start the gateway:
+
+```bash
+openclaw gateway run
+```
+
+7. Verify the connection:
+
+```bash
+openclaw channels status
+```
+
+### Manual Installation
+
+Alternatively, install via the CLI or npm directly:
 
 ```bash
 openclaw plugins install @coffeexdev/xmtp
 ```
 
-Or install manually via npm:
-
 ```bash
 npm install @coffeexdev/xmtp
 ```
 
+Then configure XMTP manually in your OpenClaw config (see below).
+
 ## Configuration
 
-Add XMTP channel configuration to your OpenClaw config (`openclaw.yaml` or equivalent):
+Add XMTP channel configuration to your OpenClaw config (`~/.openclaw/openclaw.json`):
 
 ### Single Account (backward compatible)
 
